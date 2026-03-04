@@ -1,0 +1,4 @@
+streamlit==1.29.0
+akshare==1.11.57
+pandas==2.1.4
+plotly==5.18.0

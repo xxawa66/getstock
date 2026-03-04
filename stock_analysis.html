@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A股股票K线分析</title>
+    <!-- PyScript -->
+    <link rel="stylesheet" href="https://pyscript.net/latest/pyscript.css">
+    <script defer src="https://pyscript.net/latest/pyscript.js"></script>
+    <!-- ECharts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .input-section {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        input[type="text"] {
+            width: 200px;
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .chart-container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            height: 500px;
+        }
+        .download-section {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        #download-btn {
+            background-color: #2196F3;
+        }
+        #download-btn:hover {
+            background-color: #0b7dda;
+        }
+        .error-message {
+            color: red;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>A股股票K线分析</h1>
+    
+    <div class="input-section">
+        <label for="stock-code">股票代码：</label>
+        <input type="text" id="stock-code" placeholder="例如：600000">
+        <button id="query-btn">查询</button>
+        <div id="error-message" class="error-message"></div>
+    </div>
+    
+    <div class="chart-container">
+        <div id="kline-chart" style="width: 100%; height: 100%;"></div>
+    </div>
+    
+    <div class="download-section">
+        <button id="download-btn">下载CSV数据</button>
+    </div>
+    
+    <py-script packages="baostock, pandas">
+        import asyncio
+        import json
+        import pandas as pd
+        from datetime import datetime, timedelta
+        import baostock as bs
+        
+        # 全局变量存储数据
+        stock_data = None
+        stock_code = None
+        
+        def get_stock_data(code):
+            global stock_data, stock_code
+            stock_code = code
+            
+            # 计算一年前的日期
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+            
+            try:
+                # 登录Baostock
+                lg = bs.login()
+                if lg.error_code != '0':
+                    return f"错误：{lg.error_msg}"
+                
+                # 使用Baostock获取K线数据
+                rs = bs.query_history_k_data_plus(
+                    code=f"sh.{code}" if code.startswith('6') else f"sz.{code}",
+                    fields="date,open,high,low,close,volume",
+                    start_date=start_date,
+                    end_date=end_date,
+                    frequency="d",
+                    adjustflag="2"  # 前复权
+                )
+                
+                # 处理数据
+                data_list = []
+                while (rs.error_code == '0') & rs.next():
+                    data_list.append(rs.get_row_data())
+                
+                # 登出Baostock
+                bs.logout()
+                
+                # 转换为DataFrame
+                stock_zh_a_hist_df = pd.DataFrame(
+                    data_list,
+                    columns=['日期', '开盘', '最高', '最低', '收盘', '成交量']
+                )
+                
+                # 转换数据类型
+                stock_zh_a_hist_df['开盘'] = pd.to_numeric(stock_zh_a_hist_df['开盘'])
+                stock_zh_a_hist_df['最高'] = pd.to_numeric(stock_zh_a_hist_df['最高'])
+                stock_zh_a_hist_df['最低'] = pd.to_numeric(stock_zh_a_hist_df['最低'])
+                stock_zh_a_hist_df['收盘'] = pd.to_numeric(stock_zh_a_hist_df['收盘'])
+                stock_zh_a_hist_df['成交量'] = pd.to_numeric(stock_zh_a_hist_df['成交量'])
+                
+                stock_data = stock_zh_a_hist_df
+                return stock_zh_a_hist_df
+            except Exception as e:
+                return f"错误：{str(e)}"
+        
+        def prepare_chart_data(df):
+            # 准备ECharts K线图数据
+            dates = df['日期'].tolist()
+            data = []
+            for i, date in enumerate(dates):
+                data.append([
+                    date,
+                    float(df.iloc[i]['开盘']),
+                    float(df.iloc[i]['收盘']),
+                    float(df.iloc[i]['最低']),
+                    float(df.iloc[i]['最高']),
+                    float(df.iloc[i]['成交量'])
+                ])
+            return data
+        
+        def update_chart():
+            if stock_data is not None:
+                chart_data = prepare_chart_data(stock_data)
+                # 调用JavaScript更新图表
+                js_code = f"updateChart({json.dumps(chart_data)})"
+                pyscript.run_js(js_code)
+        
+        def download_csv():
+            if stock_data is not None:
+                # 转换为CSV字符串
+                csv_content = stock_data.to_csv(index=False, encoding='utf-8-sig')
+                # 调用JavaScript下载
+                js_code = f"downloadCSV({json.dumps(csv_content)}, '{stock_code}.csv')"
+                pyscript.run_js(js_code)
+        
+        # 绑定查询按钮事件
+        async def on_query():
+            code = pyscript.document.getElementById('stock-code').value.strip()
+            error_div = pyscript.document.getElementById('error-message')
+            
+            if not code:
+                error_div.innerText = "请输入股票代码"
+                return
+            
+            # 清空错误信息
+            error_div.innerText = ""
+            
+            # 获取数据
+            result = get_stock_data(code)
+            
+            if isinstance(result, str) and result.startswith("错误"):
+                error_div.innerText = result
+            else:
+                # 更新图表
+                update_chart()
+        
+        # 绑定下载按钮事件
+        async def on_download():
+            if stock_data is None:
+                error_div = pyscript.document.getElementById('error-message')
+                error_div.innerText = "请先查询股票数据"
+                return
+            download_csv()
+        
+        # 注册事件监听器
+        from pyscript import when
+        
+        @when('click', '#query-btn')
+        async def on_query_handler():
+            await on_query()
+        
+        @when('click', '#download-btn')
+        async def on_download_handler():
+            await on_download()
+    </py-script>
+    
+    <script>
+        // 初始化ECharts实例
+        var chart = echarts.init(document.getElementById('kline-chart'));
+        
+        // 更新图表函数
+        function updateChart(data) {
+            var option = {
+                title: {
+                    text: '股票K线图',
+                    left: 'center'
+                },
+                tooltip: {
+                    trigger: 'axis',
+                    formatter: function(params) {
+                        var item = params[0];
+                        return item.name + '<br/>'
+                            + '开盘: ' + item.value[1] + '<br/>'
+                            + '收盘: ' + item.value[2] + '<br/>'
+                            + '最低: ' + item.value[3] + '<br/>'
+                            + '最高: ' + item.value[4] + '<br/>'
+                            + '成交量: ' + item.value[5];
+                    }
+                },
+                xAxis: {
+                    type: 'category',
+                    data: data.map(function(item) { return item[0]; }),
+                    boundaryGap: false
+                },
+                yAxis: {
+                    type: 'value'
+                },
+                series: [{
+                    name: 'K线',
+                    type: 'candlestick',
+                    data: data.map(function(item) {
+                        return [item[1], item[4], item[3], item[2]];
+                    }),
+                    itemStyle: {
+                        color: '#ef4136',
+                        color0: '#4caf50',
+                        borderColor: '#ef4136',
+                        borderColor0: '#4caf50'
+                    }
+                }]
+            };
+            chart.setOption(option);
+        }
+        
+        // 下载CSV函数
+        function downloadCSV(content, filename) {
+            var blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+            var link = document.createElement('a');
+            var url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', filename);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        // 响应式调整
+        window.addEventListener('resize', function() {
+            chart.resize();
+        });
+    </script>
+</body>
+</html>
